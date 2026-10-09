@@ -2,7 +2,9 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 
+#include <array>
 #include <cmath>
+#include <complex>
 #include <iostream>
 #include <limits>
 #include <vector>
@@ -41,6 +43,171 @@ float maxAdjacentDifference(const float* data, int size)
     for (int i = 1; i < size; ++i) maximum = std::max(maximum, std::abs(data[i] - data[i - 1]));
     return maximum;
 }
+struct ToneAnalysis
+{
+    float dc = 0.0f, fundamental = 0.0f, second = 0.0f, third = 0.0f;
+    float rms = 0.0f, peak = 0.0f, frequency = 0.0f;
+};
+ToneAnalysis analyseTone(double rate, float harmonicsControl, float requestedFrequency, float inputRmsDb = -18.0f)
+{
+    using namespace vitaplug::harmohit::dsp;
+    constexpr int size = 8192;
+    const auto bin = std::max(1, static_cast<int>(std::lround(requestedFrequency * size / rate)));
+    const auto frequency = static_cast<float>(rate * bin / size);
+    HarmoCore core(ProductVariant::mix);
+    core.prepare(rate, size, 2);
+    const auto amplitude = std::sqrt(2.0f) * std::pow(10.0f, inputRmsDb / 20.0f);
+    std::vector<float> signal(static_cast<size_t>(size)), right(static_cast<size_t>(size));
+    float* channels[] { signal.data(), right.data() };
+    int64_t sampleOffset = 0;
+    const auto render = [&]
+    {
+        for (int index = 0; index < size; ++index)
+        {
+            const auto phase = 2.0 * 3.141592653589793 * frequency * static_cast<double>(sampleOffset + index) / rate;
+            signal[static_cast<size_t>(index)] = amplitude * std::sin(static_cast<float>(phase));
+            right[static_cast<size_t>(index)] = signal[static_cast<size_t>(index)];
+        }
+        sampleOffset += size;
+        core.process(channels, 2, size, { harmonicsControl, 0.0f, 0.0f, 0.0f, ExciterMode::presence3k });
+    };
+    render(); render(); render(); render();
+    ToneAnalysis result;
+    result.frequency = frequency;
+    double dc = 0.0, power = 0.0;
+    const auto magnitudeAt = [&] (int harmonic)
+    {
+        double real = 0.0, imaginary = 0.0;
+        for (int index = 0; index < size; ++index)
+        {
+            const auto phase = 2.0 * 3.141592653589793 * bin * harmonic * index / size;
+            const auto value = signal[static_cast<size_t>(index)];
+            real += value * std::cos(phase);
+            imaginary -= value * std::sin(phase);
+        }
+        return harmonic * bin < size / 2
+                 ? static_cast<float>(2.0 * std::sqrt(real * real + imaginary * imaginary) / size)
+                 : 0.0f;
+    };
+    for (const auto value : signal)
+    {
+        dc += value;
+        power += value * value;
+        result.peak = std::max(result.peak, std::abs(value));
+    }
+    result.dc = static_cast<float>(dc / size);
+    result.rms = static_cast<float>(std::sqrt(power / size));
+    result.fundamental = magnitudeAt(1);
+    result.second = magnitudeAt(2);
+    result.third = magnitudeAt(3);
+    return result;
+}
+float toneGainDb(const ToneAnalysis& active, const ToneAnalysis& neutral)
+{
+    return 20.0f * std::log10(std::max(active.fundamental, 1.0e-20f)
+                             / std::max(neutral.fundamental, 1.0e-20f));
+}
+enum class HarmonicsCalibration { r4, r5 };
+float referenceShelfGainDb(double rate, float control, float frequency, HarmonicsCalibration calibration)
+{
+    const auto x = std::clamp(control, 0.0f, 1.0f);
+    const auto shelfDb = [x, calibration] (int shelf)
+    {
+        if (calibration == HarmonicsCalibration::r4)
+        {
+            const float maxima[] { 4.0f, 5.0f, 7.0f };
+            const float linear[] { 0.70f, 0.65f, 0.60f };
+            const float quadratic[] { 0.30f, 0.35f, 0.40f };
+            return maxima[shelf] * x * (linear[shelf] + quadratic[shelf] * x);
+        }
+        const float maxima[] { 6.0f, 7.0f, 9.0f };
+        const float linear[] { 1.35f, 1.40f, 1.50f };
+        const float quadratic[] { 0.35f, 0.40f, 0.50f };
+        return maxima[shelf] * x * (linear[shelf] - quadratic[shelf] * x);
+    };
+    const auto lowpassResponse = [rate, frequency] (float cutoff)
+    {
+        const auto internalRate = rate * vitaplug::harmohit::dsp::HarmoCore::oversamplingFactor;
+        const auto a = 1.0 - std::exp(-2.0 * juce::MathConstants<double>::pi * cutoff / internalRate);
+        const auto z = std::exp(std::complex<double> { 0.0, -2.0 * juce::MathConstants<double>::pi * frequency / internalRate });
+        return a / (1.0 - (1.0 - a) * z);
+    };
+    const auto gain = [&shelfDb] (int shelf) { return std::pow(10.0, shelfDb(shelf) / 20.0); };
+    const auto body = 1.0 + (gain(0) - 1.0) * lowpassResponse(300.0f);
+    const auto presence = 1.0 + (gain(1) - 1.0) * (1.0 - lowpassResponse(1800.0f));
+    const auto air = 1.0 + (gain(2) - 1.0) * (1.0 - lowpassResponse(12000.0f));
+    return static_cast<float>(20.0 * std::log10(std::abs(body * presence * air)));
+}
+struct ProgrammeAnalysis
+{
+    float rms = 0.0f, peak = 0.0f;
+    bool finite = true;
+};
+ProgrammeAnalysis analyseProgramme(double rate, vitaplug::harmohit::dsp::HarmoSettings settings)
+{
+    using namespace vitaplug::harmohit::dsp;
+    constexpr int size = 4096;
+    HarmoCore core(ProductVariant::mix);
+    core.prepare(rate, size, 1);
+    std::vector<float> signal(static_cast<size_t>(size));
+    float* channels[] { signal.data() };
+    for (int blockIndex = 0; blockIndex < 10; ++blockIndex)
+    {
+        for (int index = 0; index < size; ++index)
+        {
+            const auto sample = blockIndex * size + index;
+            const auto time = static_cast<float>(sample / rate);
+            signal[static_cast<size_t>(index)] = 0.18f * std::sin(2.0f * juce::MathConstants<float>::pi * 110.0f * time)
+                                               + 0.13f * std::sin(2.0f * juce::MathConstants<float>::pi * 1800.0f * time)
+                                               + 0.09f * std::sin(2.0f * juce::MathConstants<float>::pi * 12000.0f * time);
+        }
+        core.process(channels, 1, size, settings);
+    }
+    ProgrammeAnalysis result;
+    double power = 0.0;
+    result.finite = allFinite(signal.data(), size);
+    for (const auto value : signal)
+    {
+        power += value * value;
+        result.peak = std::max(result.peak, std::abs(value));
+    }
+    result.rms = static_cast<float>(std::sqrt(power / size));
+    return result;
+}
+bool processHarmonicProgramme(double rate, float harmonicsControl, bool pinkNoise)
+{
+    using namespace vitaplug::harmohit::dsp;
+    constexpr int size = 2048;
+    HarmoCore core(ProductVariant::mix);
+    core.prepare(rate, size, 1);
+    std::vector<float> signal(static_cast<size_t>(size));
+    float* channels[] { signal.data() };
+    uint32_t random = 0x45d9f3bu;
+    float pinkA = 0.0f, pinkB = 0.0f;
+    float difference = 0.0f;
+    for (int blockIndex = 0; blockIndex < 8; ++blockIndex)
+    {
+        for (int index = 0; index < size; ++index)
+        {
+            const auto sample = blockIndex * size + index;
+            const auto time = static_cast<float>(sample / rate);
+            const auto multitone = 0.075f * std::sin(2.0f * juce::MathConstants<float>::pi * 440.0f * time)
+                                 + 0.055f * std::sin(2.0f * juce::MathConstants<float>::pi * 1000.0f * time)
+                                 + 0.035f * std::sin(2.0f * juce::MathConstants<float>::pi * 2500.0f * time);
+            random = random * 1664525u + 1013904223u;
+            const auto white = static_cast<float>((random >> 8) & 0xffffu) / 32768.0f - 1.0f;
+            pinkA += 0.035f * (white - pinkA);
+            pinkB += 0.004f * (pinkA - pinkB);
+            signal[static_cast<size_t>(index)] = pinkNoise ? 0.20f * pinkB : multitone;
+        }
+        const auto dry = signal;
+        core.process(channels, 1, size, { harmonicsControl, 0.0f, 0.0f, 0.0f, ExciterMode::presence3k });
+        if (!allFinite(signal.data(), size)) return false;
+        for (int index = 0; index < size; ++index)
+            difference = std::max(difference, std::abs(signal[static_cast<size_t>(index)] - dry[static_cast<size_t>(index)]));
+    }
+    return difference > 1.0e-5f;
+}
 }
 
 int main()
@@ -61,6 +228,85 @@ int main()
         if (std::abs(impulse[static_cast<size_t>(i)]) > std::abs(impulse[static_cast<size_t>(peakIndex)])) peakIndex = i;
     if (std::abs(peakIndex - core.getLatencySamples()) > 1 || !allFinite(impulse.data(), static_cast<int>(impulse.size())))
     { std::cerr << "neutral oversampling path is not latency coherent\n"; return 1; }
+
+    // MIX HARMONICS R5 retains R4's three linear shelves and redistributes
+    // their independent gain laws. Coherent-tone measurements are compared
+    // with exact R4/R5 transfer-function references at every requested sample
+    // rate, frequency and macro position.
+    const auto gainAt = [] (double rate, float control, float frequency, float inputRmsDb = -18.0f)
+    {
+        return toneGainDb(analyseTone(rate, control, frequency, inputRmsDb),
+                          analyseTone(rate, 0.0f, frequency, inputRmsDb));
+    };
+    const auto lowGain = gainAt(48000.0, 1.0f, 80.0f);
+    const auto presenceGain = gainAt(48000.0, 1.0f, 3000.0f);
+    const auto airGain = gainAt(48000.0, 1.0f, 18000.0f);
+    if (lowGain < 5.0f || presenceGain < 6.0f || airGain < 11.0f)
+    { std::cerr << "HARMONICS shelving bands do not cover the intended spectrum\n"; return 1; }
+
+    constexpr std::array frequencies { 80.0f, 300.0f, 1000.0f, 1800.0f, 3000.0f, 8000.0f, 12000.0f, 18000.0f };
+    constexpr std::array controls { 0.0f, 0.10f, 0.25f, 0.50f, 0.75f, 1.0f };
+    for (const auto rate : { 44100.0, 48000.0, 96000.0 })
+        for (const auto frequency : frequencies)
+        {
+            float previousGain = -0.01f;
+            for (const auto control : controls)
+            {
+                const auto measured = gainAt(rate, control, frequency);
+                const auto expected = referenceShelfGainDb(rate, control, frequency, HarmonicsCalibration::r5);
+                if (!std::isfinite(measured) || std::abs(measured - expected) > 0.08f
+                    || (control > 0.0f && measured <= previousGain))
+                { std::cerr << "HARMONICS response matrix or macro progression failed\n"; return 1; }
+                previousGain = measured;
+            }
+            const auto r4AtNinety = referenceShelfGainDb(rate, 0.90f, frequency, HarmonicsCalibration::r4);
+            const auto r5AtFifty = gainAt(rate, 0.50f, frequency);
+            if (std::abs(r5AtFifty - r4AtNinety) > 0.75f)
+            { std::cerr << "R5 midpoint does not approximate R4 upper-range colour\n"; return 1; }
+        }
+
+    const auto linearityReference = gainAt(48000.0, 0.75f, 3000.0f, -18.0f);
+    for (const auto rate : { 44100.0, 48000.0, 96000.0 })
+        for (const auto inputRmsDb : { -30.0f, -24.0f, -18.0f, -12.0f, -6.0f })
+        {
+            const auto neutral = analyseTone(rate, 0.0f, 1000.0f, inputRmsDb);
+            const auto active = analyseTone(rate, 1.0f, 1000.0f, inputRmsDb);
+            const auto levelGain = gainAt(rate, 0.75f, 3000.0f, inputRmsDb);
+            if (!std::isfinite(active.dc) || !std::isfinite(active.rms) || !std::isfinite(active.peak)
+                || std::abs(active.dc) > 1.0e-4f || std::abs(levelGain - linearityReference) > 0.20f
+                || active.second > active.fundamental * 1.0e-4f || active.third > active.fundamental * 1.0e-4f
+                || neutral.second > neutral.fundamental * 1.0e-4f || neutral.third > neutral.fundamental * 1.0e-4f)
+            {
+                std::cerr << "HARMONICS linearity/distortion/sample-rate matrix failed: rate=" << rate
+                          << " input=" << inputRmsDb << " dc=" << active.dc << " gain=" << levelGain
+                          << " reference=" << linearityReference << " h2=" << active.second / active.fundamental
+                          << " h3=" << active.third / active.fundamental << "\n";
+                return 1;
+            }
+        }
+
+    std::array<ProgrammeAnalysis, controls.size()> programmeByControl {};
+    for (size_t index = 0; index < controls.size(); ++index)
+    {
+        programmeByControl[index] = analyseProgramme(48000.0, { controls[index], 0.0f, 0.0f, 0.0f, ExciterMode::presence3k });
+        if (!programmeByControl[index].finite || !std::isfinite(programmeByControl[index].rms)
+            || !std::isfinite(programmeByControl[index].peak) || programmeByControl[index].peak > 8.0f
+            || (index > 0 && programmeByControl[index].rms <= programmeByControl[index - 1].rms))
+        { std::cerr << "HARMONICS programme RMS/peak progression failed\n"; return 1; }
+    }
+
+    float maximumCombinedPeak = 0.0f;
+    for (const auto rate : { 44100.0, 48000.0, 96000.0 })
+        for (const auto mode : { ExciterMode::presence3k, ExciterMode::brilliance8k, ExciterMode::pushAll })
+            for (const auto drive : { 0.0f, 1.0f })
+            {
+                const auto combined = analyseProgramme(rate, { 1.0f, 1.0f, drive, 0.0f, mode });
+                maximumCombinedPeak = std::max(maximumCombinedPeak, combined.peak);
+                if (!combined.finite || !std::isfinite(combined.rms) || !std::isfinite(combined.peak) || combined.peak > 16.0f)
+                { std::cerr << "HARMONICS/EXCITER/DRIVE interaction became unstable\n"; return 1; }
+            }
+    if (!processHarmonicProgramme(48000.0, 0.50f, false) || !processHarmonicProgramme(48000.0, 0.50f, true))
+    { std::cerr << "HARMONICS multitone or pink-noise programme test failed\n"; return 1; }
 
     for (auto mode : { ExciterMode::presence3k, ExciterMode::brilliance8k, ExciterMode::pushAll })
         if (!processCore(2, 48000.0, block, { 1.0f, 1.0f, 1.0f, 0.0f, mode }))
@@ -232,5 +478,31 @@ int main()
         || metered.getOutputVuDbfs() - metered.getInputVuDbfs() < 10.0f)
     { std::cerr << "VU output is not post-Trim or input is post-DSP\n"; return 1; }
 
-    std::cout << "DSP tests passed: 4x, " << core.getLatencySamples() << "-sample latency, transparent delayed neutral path, mono/stereo, finite output, sample-rate/block-size changes, automation, state, exciter modes, bypass alignment and pre/post VU taps.\n";
+    std::cout << "HARMONICS R4-reference/R5-measured combined gain at 48 kHz\n";
+    for (const auto control : controls)
+    {
+        std::cout << control * 100.0f << "%:";
+        for (const auto frequency : frequencies)
+            std::cout << " " << referenceShelfGainDb(48000.0, control, frequency, HarmonicsCalibration::r4)
+                      << "/" << gainAt(48000.0, control, frequency);
+        std::cout << " dB\n";
+    }
+    for (const auto rate : { 44100.0, 96000.0 })
+    {
+        float maximumRateDifference = 0.0f;
+        for (const auto control : controls)
+            for (const auto frequency : frequencies)
+                maximumRateDifference = std::max(maximumRateDifference,
+                    std::abs(gainAt(rate, control, frequency) - gainAt(48000.0, control, frequency)));
+        std::cout << "Maximum response difference at " << rate << " Hz versus 48 kHz: "
+                  << maximumRateDifference << " dB\n";
+    }
+    std::cout << "Programme RMS/peak by control:";
+    for (size_t index = 0; index < controls.size(); ++index)
+        std::cout << " " << controls[index] * 100.0f << "%=" << programmeByControl[index].rms
+                  << "/" << programmeByControl[index].peak;
+    std::cout << "; maximum HARMONICS+EXCITER+DRIVE peak " << maximumCombinedPeak << "\n";
+    std::cout << "DSP tests passed: 4x, " << core.getLatencySamples()
+              << "-sample latency, transparent delayed neutral path, R4/R5 response, HARMONICS shelves/progression/linearity/rates, "
+                 "mono/stereo, finite output, automation, state, exciter modes, bypass alignment and pre/post VU taps.\n";
 }

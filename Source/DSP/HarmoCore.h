@@ -71,7 +71,7 @@ public:
             for (int sample = 0; sample < samples; ++sample)
                 data[channel][sample] = finiteOrZero(data[channel][sample]);
 
-        const auto harmonicTarget = shapeIntensity(settings.harmonics, 0.82f, 0.34f);
+        const auto harmonicTarget = shapeHarmonicsIntensity(settings.harmonics);
         const auto exciterTarget = shapeIntensity(settings.exciter, 0.75f, 0.26f);
         const auto driveTarget = shapeIntensity(settings.drive, 1.75f, 0.65f);
         const auto trimTarget = dbToGain(std::clamp(settings.outputTrimDb, -24.0f, 12.0f));
@@ -108,10 +108,16 @@ public:
             {
                 auto& s = state[static_cast<size_t>(channel)];
                 const float input = finiteOrZero(oversampled.getChannelPointer(static_cast<size_t>(channel))[sample]);
-                const float harmonics = harmonicResidual(input, harmonicAmount, s.harmonicDc);
-                const float exciter = exciterResidual(input, exciterAmount, presenceMix, brillianceMix, s);
-                const float drive = driveResidual(input, driveAmount, s.driveDc);
-                oversampled.getChannelPointer(static_cast<size_t>(channel))[sample] = finiteOrZero((input + harmonics + exciter + drive) * trim);
+                const float harmonicInput = variant == ProductVariant::mix
+                                              ? applyMixHarmonicsShelves(input, harmonicAmount, s)
+                                              : input;
+                const float masterHarmonics = variant == ProductVariant::master
+                                                ? masterR2HarmonicResidual(input, harmonicAmount, s.masterHarmonicDc)
+                                                : 0.0f;
+                const float exciter = exciterResidual(harmonicInput, exciterAmount, presenceMix, brillianceMix, s);
+                const float drive = driveResidual(harmonicInput, driveAmount, s.driveDc);
+                oversampled.getChannelPointer(static_cast<size_t>(channel))[sample]
+                    = finiteOrZero((harmonicInput + masterHarmonics + exciter + drive) * trim);
             }
         }
         juce::dsp::AudioBlock<float> outputBlock { data, static_cast<size_t>(activeChannels), static_cast<size_t>(samples) };
@@ -123,7 +129,12 @@ public:
 
 private:
     struct OnePole { float z = 0.0f; };
-    struct ChannelState { OnePole harmonicDc, driveDc, presenceLp, presenceHp, brillianceLp, brillianceHp; };
+    struct ChannelState
+    {
+        OnePole masterHarmonicDc, driveDc;
+        OnePole harmonicBodyLp, harmonicPresenceLp, harmonicAirLp;
+        OnePole presenceLp, presenceHp, brillianceLp, brillianceHp;
+    };
     struct Smoother
     {
         float current = 0.0f, target = 0.0f, step = 0.0f; int remaining = 0;
@@ -153,11 +164,22 @@ private:
         // low/mid adjustment resolution, while the cubic rise reserves the
         // intentionally aggressive colour range for the upper control travel.
         // This is a mapping only: no output limiter or auto-normalisation is
-        // applied anywhere after the three artistic nonlinearities.
+        // applied anywhere after the artistic processing stages.
         const float curve = variant == ProductVariant::master
                               ? x * (0.60f + 0.40f * x * x)
                               : x * (0.38f + 0.62f * x * x);
         return curve * (variant == ProductVariant::mix ? mixMaximum : masterMaximum);
+    }
+    float shapeHarmonicsIntensity(float control) const noexcept
+    {
+        const float x = std::clamp(finiteOrZero(control), 0.0f, 1.0f);
+        if (variant == ProductVariant::master)
+            return x * (0.65f + 0.35f * x) * 0.34f;
+
+        // MIX keeps the established HARMONICS parameter name and 0--1 macro
+        // domain, but R4 maps it to three linear shelving stages. MASTER keeps
+        // its previous nonlinear R2 mapping above.
+        return x;
     }
     float dcBlock(float value, OnePole& dcState) const noexcept
     {
@@ -176,13 +198,51 @@ private:
         const float belowHigh = lowpass(x, high, lp);
         return belowHigh - lowpass(belowHigh, low, hp);
     }
-    float harmonicResidual(float x, float amount, OnePole& dc) const noexcept
+    struct HarmonicShelfGains
     {
-        if (amount <= 0.0f) return 0.0f;
-        const float bounded = std::tanh(x * (1.0f + 2.5f * amount));
-        const float even = bounded * std::abs(bounded);
+        float body = 1.0f;
+        float presence = 1.0f;
+        float air = 1.0f;
+    };
+    HarmonicShelfGains calibrateMixHarmonics(float macro) const noexcept
+    {
+        const float x = std::clamp(finiteOrZero(macro), 0.0f, 1.0f);
+        // Independent concave laws move R4's useful upper-range colour into
+        // the middle of the macro without collapsing the 0--25% adjustment
+        // range. At 50%, the nominal 300/1800/12000 Hz gains closely match
+        // R4 around 90%; each curve remains smooth and strictly increasing.
+        const float bodyDb = 6.0f * x * (1.35f - 0.35f * x);
+        const float presenceDb = 7.0f * x * (1.40f - 0.40f * x);
+        const float airDb = 9.0f * x * (1.50f - 0.50f * x);
+        return { dbToGain(bodyDb), dbToGain(presenceDb), dbToGain(airDb) };
+    }
+    float applyMixHarmonicsShelves(float x, float macro, ChannelState& channelState) const noexcept
+    {
+        const auto gains = calibrateMixHarmonics(macro);
+
+        // Three inexpensive first-order shelves run continuously so their
+        // states are already settled when the smoothed macro leaves zero.
+        // With unity gains the algebra returns x exactly; no dry/wet
+        // cancellation, saturation, DC blocker or output normalisation exists.
+        const float bodyBand = lowpass(x, 300.0f, channelState.harmonicBodyLp);
+        const float bodyShaped = x + (gains.body - 1.0f) * bodyBand;
+
+        const float belowPresence = lowpass(bodyShaped, 1800.0f, channelState.harmonicPresenceLp);
+        const float presenceBand = bodyShaped - belowPresence;
+        const float presenceShaped = bodyShaped + (gains.presence - 1.0f) * presenceBand;
+
+        const float belowAir = lowpass(presenceShaped, 12000.0f, channelState.harmonicAirLp);
+        const float airBand = presenceShaped - belowAir;
+        return presenceShaped + (gains.air - 1.0f) * airBand;
+    }
+    float masterR2HarmonicResidual(float x, float amount, OnePole& dc) const noexcept
+    {
+        // MASTER is outside R4's authorised scope. Keep its R2 generator and
+        // macro relationship bit-for-bit independent of the new MIX path.
+        const float bounded = std::tanh(x * (1.0f + 1.65f * amount));
+        const float even = bounded * bounded;
         const float odd = bounded * bounded * bounded;
-        return dcBlock((0.55f * even + 0.45f * odd) * amount, dc);
+        return dcBlock((0.68f * even + 0.32f * odd) * amount, dc);
     }
     float exciterResidual(float x, float amount, float presenceMix, float brillianceMix, ChannelState& s) const noexcept
     {
