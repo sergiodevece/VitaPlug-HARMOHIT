@@ -35,7 +35,8 @@ public:
     std::atomic<uint64_t>& getVuUpdateCounter() noexcept { return vuUpdateCounter; }
 private:
     vitaplug::harmohit::dsp::HarmoCore core;
-    std::atomic<float> *harmonics = nullptr, *exciter = nullptr, *drive = nullptr, *exciterMode = nullptr, *outputTrim = nullptr;
+    std::atomic<float> *harmonics = nullptr, *exciter = nullptr, *drive = nullptr, *exciterMode = nullptr,
+                       *exciterRange = nullptr, *pushAll = nullptr, *outputTrim = nullptr, *bypass = nullptr;
     std::atomic<float> inputVuDbfs { -72.0f };
     std::atomic<float> outputVuDbfs { -72.0f };
     std::atomic<uint64_t> vuUpdateCounter { 0 };

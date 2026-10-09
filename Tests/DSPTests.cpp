@@ -100,26 +100,25 @@ int main()
     if (std::abs(restored.parameters.getRawParameterValue("harmonics")->load() - 100.0f) > 0.01f)
     { std::cerr << "parameter state serialisation failed\n"; return 1; }
 
-    // The three visible rotary controls have independent APVTS attachments.
-    // Exercise host-to-control and control-to-host paths without audio I/O.
+    // The engineering editor exposes direct APVTS attachments with visible
+    // numeric slider text and no editor-owned DSP mode state.
     juce::ScopedJuceInitialiser_GUI gui;
     HarmoHitAudioProcessor controlProcessor;
     controlProcessor.parameters.getParameter("harmonics")->setValueNotifyingHost(0.25f);
     HarmoHitAudioProcessorEditor controlEditor(controlProcessor);
-    auto* harmonicControl = dynamic_cast<HarmoMainKnob*>(controlEditor.getChildComponent(2));
-    auto* exciterControl = dynamic_cast<HarmoMainKnob*>(controlEditor.getChildComponent(3));
-    auto* driveControl = dynamic_cast<HarmoMainKnob*>(controlEditor.getChildComponent(4));
-    auto* rangeControl = dynamic_cast<HarmoRangeSwitch*>(controlEditor.getChildComponent(5));
-    auto* pushAllControl = dynamic_cast<HarmoPushAllButton*>(controlEditor.getChildComponent(6));
-    auto* trimControl = dynamic_cast<HarmoTrimKnob*>(controlEditor.getChildComponent(7));
-    if (harmonicControl == nullptr || exciterControl == nullptr || driveControl == nullptr
-        || rangeControl == nullptr || pushAllControl == nullptr || trimControl == nullptr
-        || !harmonicControl->isDoubleClickReturnEnabled() || harmonicControl->getDoubleClickReturnValue() != 0.0
-        || !harmonicControl->getVelocityBasedMode() || harmonicControl->getMinimum() != 0.0 || harmonicControl->getMaximum() != 100.0)
-    { std::cerr << "main knob configuration failed\n"; return 1; }
-    if (std::abs(harmonicControl->getValue() - 25.0) > 0.11 || std::abs(exciterControl->getValue()) > 0.01
-        || std::abs(driveControl->getValue()) > 0.01)
-    { std::cerr << "preset value did not initialise only the correct knob\n"; return 1; }
+    auto* harmonicControl = dynamic_cast<juce::Slider*>(controlEditor.findChildWithID("harmonics"));
+    auto* exciterControl = dynamic_cast<juce::Slider*>(controlEditor.findChildWithID("exciter"));
+    auto* driveControl = dynamic_cast<juce::Slider*>(controlEditor.findChildWithID("drive"));
+    auto* rangeControl = dynamic_cast<juce::ComboBox*>(controlEditor.findChildWithID("exciterRange"));
+    auto* pushAllControl = dynamic_cast<juce::ToggleButton*>(controlEditor.findChildWithID("pushAll"));
+    auto* bypassControl = dynamic_cast<juce::ToggleButton*>(controlEditor.findChildWithID("bypass"));
+    auto* trimControl = dynamic_cast<juce::Slider*>(controlEditor.findChildWithID("outputTrim"));
+    if (controlEditor.getWidth() != 520 || controlEditor.getHeight() != 300 || harmonicControl == nullptr || exciterControl == nullptr
+        || driveControl == nullptr || rangeControl == nullptr || pushAllControl == nullptr || bypassControl == nullptr || trimControl == nullptr
+        || harmonicControl->getSliderStyle() != juce::Slider::LinearHorizontal || harmonicControl->getMinimum() != 0.0 || harmonicControl->getMaximum() != 100.0)
+    { std::cerr << "engineering editor configuration failed\n"; return 1; }
+    if (std::abs(harmonicControl->getValue() - 25.0) > 0.11 || std::abs(exciterControl->getValue()) > 0.01 || std::abs(driveControl->getValue()) > 0.01)
+    { std::cerr << "host-to-slider attachment failed\n"; return 1; }
     harmonicControl->setValue(0.0, juce::sendNotificationSync);
     if (std::abs(controlProcessor.parameters.getRawParameterValue("harmonics")->load()) > 0.01f)
     { std::cerr << "main knob minimum failed\n"; return 1; }
@@ -141,47 +140,64 @@ int main()
         || std::abs(restoredControls.parameters.getRawParameterValue("drive")->load() - 100.0f) > 0.11f)
     { std::cerr << "main knob preset restoration failed\n"; return 1; }
 
-    // The retained three-state exciterMode parameter supplies PUSH ALL, while
-    // exciterRange remembers the desired band during mode 2.
-    const auto modeValue = [&controlProcessor] { return controlProcessor.parameters.getRawParameterValue("exciterMode")->load(); };
+    // RANGE and PUSH ALL are direct processor parameters; no editor callback
+    // decides the selected DSP mode.
     const auto rangeValue = [&controlProcessor] { return controlProcessor.parameters.getRawParameterValue("exciterRange")->load(); };
-    if (std::abs(modeValue()) > 0.01f || std::abs(rangeValue()) > 0.01f || pushAllControl->getToggleState())
+    const auto pushValue = [&controlProcessor] { return controlProcessor.parameters.getRawParameterValue("pushAll")->load(); };
+    if (std::abs(rangeValue()) > 0.01f || std::abs(pushValue()) > 0.01f || pushAllControl->getToggleState())
     { std::cerr << "3 kHz + OFF mapping failed\n"; return 1; }
-    controlProcessor.parameters.getParameter("exciterRange")->setValueNotifyingHost(1.0f);
-    rangeControl->setToggleState(true, juce::dontSendNotification);
-    rangeControl->onClick();
-    if (std::abs(modeValue() - 1.0f) > 0.01f || std::abs(rangeValue() - 1.0f) > 0.01f || pushAllControl->getToggleState())
-    { std::cerr << "8 kHz + OFF mapping failed\n"; return 1; }
-    pushAllControl->setToggleState(true, juce::dontSendNotification);
-    pushAllControl->onClick();
-    if (std::abs(modeValue() - 2.0f) > 0.01f || std::abs(rangeValue() - 1.0f) > 0.01f || !pushAllControl->getToggleState())
-    { std::cerr << "8 kHz + IN mapping failed\n"; return 1; }
-    controlProcessor.parameters.getParameter("exciterRange")->setValueNotifyingHost(0.0f);
-    rangeControl->setToggleState(false, juce::dontSendNotification);
-    rangeControl->onClick();
-    if (std::abs(modeValue() - 2.0f) > 0.01f || std::abs(rangeValue()) > 0.01f || !pushAllControl->getToggleState())
-    { std::cerr << "3 kHz + IN mapping failed\n"; return 1; }
-    pushAllControl->setToggleState(false, juce::dontSendNotification);
-    pushAllControl->onClick();
-    if (std::abs(modeValue()) > 0.01f || std::abs(rangeValue()) > 0.01f || pushAllControl->getToggleState())
-    { std::cerr << "PUSH ALL did not restore selected range\n"; return 1; }
+    rangeControl->setSelectedId(2, juce::sendNotificationSync);
+    if (std::abs(rangeValue() - 1.0f) > 0.01f || pushAllControl->getToggleState()) { std::cerr << "RANGE attachment failed\n"; return 1; }
+    if (!pushAllControl->getClickingTogglesState() || !bypassControl->getClickingTogglesState())
+    { std::cerr << "toggle controls are not mouse-operable\n"; return 1; }
+    controlProcessor.parameters.getParameter("pushAll")->setValueNotifyingHost(1.0f);
+    controlProcessor.parameters.getParameter("bypass")->setValueNotifyingHost(1.0f);
+    if (std::abs(pushValue() - 1.0f) > 0.01f || controlProcessor.parameters.getRawParameterValue("bypass")->load() < 0.5f)
+    { std::cerr << "PUSH ALL/BYPASS host automation failed\n"; return 1; }
     trimControl->setValue(12.0, juce::sendNotificationSync);
     if (std::abs(controlProcessor.parameters.getRawParameterValue("outputTrim")->load() - 12.0f) > 0.11f)
     { std::cerr << "Output Trim attachment failed\n"; return 1; }
 
-    // Simulate a saved session from before exciterRange existed.
+    // Simulate a saved session from before RANGE/PUSH ALL were independent.
     HarmoHitAudioProcessor legacySource;
     legacySource.parameters.getParameter("exciterMode")->setValueNotifyingHost(0.5f); // choice index 1: 8 kHz
     auto legacyState = legacySource.parameters.copyState();
     for (int index = legacyState.getNumChildren(); --index >= 0;)
-        if (legacyState.getChild(index).getProperty("id").toString() == "exciterRange") legacyState.removeChild(index, nullptr);
+        if (legacyState.getChild(index).getProperty("id").toString() == "exciterRange"
+            || legacyState.getChild(index).getProperty("id").toString() == "pushAll") legacyState.removeChild(index, nullptr);
     juce::MemoryBlock legacyData;
     if (auto legacyXml = legacyState.createXml()) HarmoHitAudioProcessor::copyXmlToBinary(*legacyXml, legacyData);
     HarmoHitAudioProcessor migrated;
     migrated.setStateInformation(legacyData.getData(), static_cast<int>(legacyData.getSize()));
     if (std::abs(migrated.parameters.getRawParameterValue("exciterMode")->load() - 1.0f) > 0.01f
-        || std::abs(migrated.parameters.getRawParameterValue("exciterRange")->load() - 1.0f) > 0.01f)
+        || std::abs(migrated.parameters.getRawParameterValue("exciterRange")->load() - 1.0f) > 0.01f
+        || migrated.parameters.getRawParameterValue("pushAll")->load() > 0.01f)
     { std::cerr << "legacy exciter state migration failed\n"; return 1; }
+
+    // No editor is created here: host automation of RANGE and PUSH ALL must
+    // select different processor modes on its own.
+    const auto renderClosedEditorMode = [&midi] (float range, float push)
+    {
+        HarmoHitAudioProcessor processor;
+        processor.prepareToPlay(48000.0, 128);
+        processor.parameters.getParameter("exciter")->setValueNotifyingHost(1.0f);
+        processor.parameters.getParameter("exciterRange")->setValueNotifyingHost(range);
+        processor.parameters.getParameter("pushAll")->setValueNotifyingHost(push);
+        juce::AudioBuffer<float> rendered(1, 128);
+        for (int iteration = 0; iteration < 20; ++iteration)
+        {
+            const auto source = tone(128, 3000.0f, 48000.0);
+            rendered.copyFrom(0, 0, source.data(), 128);
+            processor.processBlock(rendered, midi);
+        }
+        return rendered;
+    };
+    const auto presenceClosed = renderClosedEditorMode(0.0f, 0.0f);
+    const auto brillianceClosed = renderClosedEditorMode(1.0f, 0.0f);
+    const auto pushAllClosed = renderClosedEditorMode(1.0f, 1.0f);
+    if (maxDifference(presenceClosed, brillianceClosed) < 1.0e-4f
+        || maxDifference(pushAllClosed, brillianceClosed) < 1.0e-4f)
+    { std::cerr << "closed-editor RANGE/PUSH ALL automation did not reach DSP\n"; return 1; }
 
     // VU taps are fixed at the processor input and post-Trim output. A 300 ms
     // run allows the documented 300 ms power integrator to settle.

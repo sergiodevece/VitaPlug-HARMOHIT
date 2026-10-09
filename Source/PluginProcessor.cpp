@@ -33,7 +33,10 @@ HarmoHitAudioProcessor::HarmoHitAudioProcessor()
     exciter = parameters.getRawParameterValue("exciter");
     drive = parameters.getRawParameterValue("drive");
     exciterMode = parameters.getRawParameterValue("exciterMode");
+    exciterRange = parameters.getRawParameterValue("exciterRange");
+    pushAll = parameters.getRawParameterValue("pushAll");
     outputTrim = parameters.getRawParameterValue("outputTrim");
+    bypass = parameters.getRawParameterValue("bypass");
 }
 
 const juce::String HarmoHitAudioProcessor::getName() const
@@ -56,13 +59,15 @@ juce::AudioProcessorValueTreeState::ParameterLayout HarmoHitAudioProcessor::crea
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { "harmonics", 1 }, "Harmonics", Range { 0.0f, 100.0f, 0.1f }, 0.0f, percentAttributes()));
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { "exciter", 1 }, "Exciter", Range { 0.0f, 100.0f, 0.1f }, 0.0f, percentAttributes()));
+    // Kept solely to read sessions made by the original editor. New processing
+    // is driven by exciterRange + pushAll, both of which are valid without an
+    // editor instance.
     layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID { "exciterMode", 1 }, "Exciter Mode", juce::StringArray { "3 kHz", "8 kHz", "PUSH ALL" }, 0));
-    // exciterMode is retained exactly for old sessions and host automation.
-    // This parameter remembers the selected band while PUSH ALL (mode 2) is
-    // active, so returning to OFF restores 3 kHz or 8 kHz deterministically.
     layout.add(std::make_unique<juce::AudioParameterChoice>(juce::ParameterID { "exciterRange", 1 }, "Exciter Range", juce::StringArray { "3 kHz", "8 kHz" }, 0));
+    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID { "pushAll", 1 }, "Push All", false));
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { "drive", 1 }, "Drive", Range { 0.0f, 100.0f, 0.1f }, 0.0f, percentAttributes()));
     layout.add(std::make_unique<juce::AudioParameterFloat>(juce::ParameterID { "outputTrim", 1 }, "Output Trim", Range { -24.0f, 12.0f, 0.1f }, 0.0f, dbAttributes()));
+    layout.add(std::make_unique<juce::AudioParameterBool>(juce::ParameterID { "bypass", 1 }, "Bypass", false));
     return layout;
 }
 
@@ -89,9 +94,11 @@ void HarmoHitAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce
     std::array<float*, 2> channels {};
     const int active = std::min(2, buffer.getNumChannels());
     for (int channel = 0; channel < active; ++channel) channels[static_cast<size_t>(channel)] = buffer.getWritePointer(channel);
-    const auto mode = std::clamp(static_cast<int>(exciterMode->load()), 0, 2);
-    core.process(channels.data(), active, buffer.getNumSamples(), { harmonics->load() / 100.0f, exciter->load() / 100.0f,
-        drive->load() / 100.0f, outputTrim->load(), static_cast<vitaplug::harmohit::dsp::ExciterMode>(mode) });
+    const auto mode = pushAll->load() >= 0.5f ? 2 : std::clamp(static_cast<int>(exciterRange->load()), 0, 1);
+    const auto settings = bypass->load() >= 0.5f ? vitaplug::harmohit::dsp::HarmoSettings {}
+        : vitaplug::harmohit::dsp::HarmoSettings { harmonics->load() / 100.0f, exciter->load() / 100.0f,
+            drive->load() / 100.0f, outputTrim->load(), static_cast<vitaplug::harmohit::dsp::ExciterMode>(mode) };
+    core.process(channels.data(), active, buffer.getNumSamples(), settings);
     updateVuMeter(buffer, false);
     vuUpdateCounter.fetch_add(1, std::memory_order_relaxed);
 }
@@ -147,16 +154,20 @@ void HarmoHitAudioProcessor::setStateInformation(const void* data, int size)
         {
             const auto restoredState = juce::ValueTree::fromXml(*xml);
             const auto hasExciterRange = containsParameterId(restoredState, "exciterRange");
+            const auto hasPushAll = containsParameterId(restoredState, "pushAll");
             parameters.replaceState(restoredState);
-            // Old sessions held only exciterMode. Modes 0/1 map exactly to the
-            // new remembered range; legacy PUSH ALL retains its historical 3k
-            // fallback because no hidden range existed in those sessions.
+            // Sessions from the vintage editor may contain only the three-state
+            // parameter, or that parameter plus a remembered range. Migrate on
+            // state restore, never from the audio thread.
+            const auto legacyMode = std::clamp(static_cast<int>(exciterMode->load()), 0, 2);
             if (!hasExciterRange)
             {
-                const auto legacyMode = static_cast<int>(exciterMode->load());
                 if (auto* range = parameters.getParameter("exciterRange"))
                     range->setValueNotifyingHost(legacyMode == 1 ? 1.0f : 0.0f);
             }
+            if (!hasPushAll)
+                if (auto* push = parameters.getParameter("pushAll"))
+                    push->setValueNotifyingHost(legacyMode == 2 ? 1.0f : 0.0f);
         }
 }
 juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() { return new HarmoHitAudioProcessor(); }

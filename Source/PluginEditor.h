@@ -2,56 +2,19 @@
 
 #include "PluginProcessor.h"
 
-class HarmoVuMeter final : public juce::Component, private juce::Timer
+class HarmoEngineeringMeter final : public juce::Component, private juce::Timer
 {
 public:
-    HarmoVuMeter(juce::String caption, std::atomic<float>& sourceDbfs, std::atomic<uint64_t>& sourceCounter);
+    HarmoEngineeringMeter(juce::String name, std::atomic<float>& source);
     void paint(juce::Graphics&) override;
 
 private:
     void timerCallback() override;
-    juce::String caption;
-    std::atomic<float>& sourceDbfs;
-    std::atomic<uint64_t>& sourceCounter;
-    uint64_t lastCounter = 0;
+    juce::String name;
+    std::atomic<float>& source;
     float displayedDbfs = -72.0f;
 };
 
-class HarmoMainKnob final : public juce::Slider
-{
-public:
-    explicit HarmoMainKnob(juce::String caption);
-    void paint(juce::Graphics&) override;
-    void valueChanged() override;
-
-private:
-    juce::String caption;
-};
-
-class HarmoRangeSwitch final : public juce::Button
-{
-public:
-    HarmoRangeSwitch();
-    void paintButton(juce::Graphics&, bool, bool) override;
-};
-
-class HarmoPushAllButton final : public juce::Button
-{
-public:
-    HarmoPushAllButton();
-    void paintButton(juce::Graphics&, bool, bool) override;
-};
-
-class HarmoTrimKnob final : public juce::Slider
-{
-public:
-    HarmoTrimKnob();
-    void paint(juce::Graphics&) override;
-    void valueChanged() override;
-};
-
-// The front-panel composition remains static apart from the two VU components.
-// Control widgets and parameter attachments follow in later UI phases.
 class HarmoHitAudioProcessorEditor final : public juce::AudioProcessorEditor
 {
 public:
@@ -60,27 +23,27 @@ public:
     void resized() override;
 
 private:
-    HarmoHitAudioProcessor& audioProcessor;
-    juce::Image panelArtwork;
-    HarmoVuMeter inputVu { "INPUT", audioProcessor.getInputVuSource(), audioProcessor.getVuUpdateCounter() };
-    HarmoVuMeter outputVu { "OUTPUT", audioProcessor.getOutputVuSource(), audioProcessor.getVuUpdateCounter() };
-    HarmoMainKnob harmonicsKnob { "HARMONICS" };
-    HarmoMainKnob exciterKnob { "EXCITER" };
-    HarmoMainKnob driveKnob { "DRIVE" };
-    using Attachment = juce::AudioProcessorValueTreeState::SliderAttachment;
-    Attachment harmonicsAttachment { audioProcessor.parameters, "harmonics", harmonicsKnob };
-    Attachment exciterAttachment { audioProcessor.parameters, "exciter", exciterKnob };
-    Attachment driveAttachment { audioProcessor.parameters, "drive", driveKnob };
-    HarmoRangeSwitch rangeSwitch;
-    HarmoPushAllButton pushAllButton;
-    HarmoTrimKnob outputTrimKnob;
+    using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
-    ButtonAttachment rangeAttachment { audioProcessor.parameters, "exciterRange", rangeSwitch };
-    Attachment outputTrimAttachment { audioProcessor.parameters, "outputTrim", outputTrimKnob };
-    std::unique_ptr<juce::ParameterAttachment> pushAllAttachment;
-    std::unique_ptr<juce::ParameterAttachment> rangeModeAttachment;
-    bool syncingLegacyExciterMode = false;
-    void syncLegacyExciterMode(float);
-    void setLegacyExciterMode(int);
+    using ComboBoxAttachment = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
+
+    HarmoHitAudioProcessor& audioProcessor;
+    juce::Label harmonicsLabel { {}, "HARMONICS" };
+    juce::Label exciterLabel { {}, "EXCITER" };
+    juce::Label driveLabel { {}, "DRIVE" };
+    juce::Label trimLabel { {}, "OUTPUT TRIM" };
+    juce::Slider harmonics, exciter, drive, outputTrim;
+    juce::Label rangeLabel { {}, "RANGE" };
+    juce::ComboBox range;
+    juce::ToggleButton pushAll { "PUSH ALL" }, bypass { "BYPASS" };
+    HarmoEngineeringMeter inputMeter { "INPUT", audioProcessor.getInputVuSource() };
+    HarmoEngineeringMeter outputMeter { "OUTPUT", audioProcessor.getOutputVuSource() };
+    SliderAttachment harmonicsAttachment { audioProcessor.parameters, "harmonics", harmonics };
+    SliderAttachment exciterAttachment { audioProcessor.parameters, "exciter", exciter };
+    SliderAttachment driveAttachment { audioProcessor.parameters, "drive", drive };
+    SliderAttachment outputTrimAttachment { audioProcessor.parameters, "outputTrim", outputTrim };
+    ComboBoxAttachment rangeAttachment { audioProcessor.parameters, "exciterRange", range };
+    ButtonAttachment pushAllAttachment { audioProcessor.parameters, "pushAll", pushAll };
+    ButtonAttachment bypassAttachment { audioProcessor.parameters, "bypass", bypass };
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HarmoHitAudioProcessorEditor)
 };
