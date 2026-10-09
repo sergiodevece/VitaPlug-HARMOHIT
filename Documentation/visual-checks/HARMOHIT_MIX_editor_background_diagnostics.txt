@@ -1,0 +1,5 @@
+resourcePointer=non-null
+resourceBytes=905620
+genericValid=true
+genericSize=1180x590
+centrePixelARGB=ff09160c
