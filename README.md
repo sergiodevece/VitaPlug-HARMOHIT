@@ -10,6 +10,12 @@ HARMOHIT is an in-progress C++/JUCE audio-effects project comprising two AU/VST3
 
 The project explores spectral shaping, aural excitation and analog-inspired drive. It is published as a technical portfolio and learning record; see [Reuse and licensing](#reuse-and-licensing) before using any source or assets.
 
+## Final UI design
+
+The following 760×380 image is the approved final visual design for HARMOHIT MIX. It establishes the vintage Vitalab presentation, control layout and visual identity for the final UI.
+
+![Approved final HARMOHIT MIX UI design](Documentation/screenshots/HARMOHIT_MIX_final_UI_design_760x380.png)
+
 ## Current implementation
 
 The current source of truth is commit `34a1909` and the code in this repository.
@@ -24,7 +30,7 @@ The current source of truth is commit `34a1909` and the code in this repository.
 | Metering | Input and post-Trim output VU taps with a 300 ms power integration |
 | Editor | A functional 520×300 engineering editor with direct parameter attachments |
 
-The vintage panel artwork under `Resources/HARMOHIT/` and the large visual-check images are design assets and visual explorations. They are **not** the current runtime editor drawn by `Source/PluginEditor.cpp`; the current compiled editor is the engineering interface described above. This distinction is intentional in the documentation so that the repository does not misrepresent a mockup as a shipped UI.
+The approved final UI design above, the vintage panel artwork under `Resources/HARMOHIT/`, and the large visual-check images describe the project’s visual direction. They are distinct from the current runtime editor drawn by `Source/PluginEditor.cpp`; the current compiled editor is the engineering interface described above. This distinction keeps the repository technically accurate while preserving the final UI design as the visual reference.
 
 ## Logic Pro smoke capture
 
