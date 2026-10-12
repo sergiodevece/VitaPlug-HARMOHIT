@@ -26,6 +26,14 @@ The current source of truth is commit `34a1909` and the code in this repository.
 
 The vintage panel artwork under `Resources/HARMOHIT/` and the large visual-check images are design assets and visual explorations. They are **not** the current runtime editor drawn by `Source/PluginEditor.cpp`; the current compiled editor is the engineering interface described above. This distinction is intentional in the documentation so that the repository does not misrepresent a mockup as a shipped UI.
 
+## Logic Pro smoke capture
+
+The following is an authentic HARMOHIT MIX smoke capture from Logic Pro, recorded on 9 October 2026. It is retained as evidence of an in-host test and is distinct from the design-reference artwork.
+
+![HARMOHIT MIX running in Logic Pro](Documentation/screenshots/HARMOHIT_MIX_Logic_Pro_smoke_2026-10-09.png)
+
+The capture documents the tested MIX presentation at that point in development; the checked-in source and implementation-status notes above remain the authoritative description of the current code.
+
 ## Signal path
 
 ```text

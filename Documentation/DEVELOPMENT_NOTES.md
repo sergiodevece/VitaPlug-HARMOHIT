@@ -46,6 +46,7 @@ The test suite also asserts that the MIX HARMONICS path remains linear under the
 ## Current limits and follow-up work
 
 - The checked-in runtime editor is an engineering UI, not the vintage panel shown in artwork and visual explorations.
+- `Documentation/screenshots/HARMOHIT_MIX_Logic_Pro_smoke_2026-10-09.png` is an authentic Logic Pro smoke capture. It records an in-host test, not a claim that its vintage presentation is the current editor source.
 - Automated DSP tests run independently of a DAW. AU/VST3 validation in target hosts remains a separate release gate.
 - The CMake project depends on a user-supplied JUCE checkout and currently has no hosted CI configuration; this avoids publishing an automated build that cannot obtain JUCE under a verified licensing setup.
 - The `futureOversamplingStages` constant reserves an architectural direction for 8× processing but does not expose or implement a runtime 8× mode.
