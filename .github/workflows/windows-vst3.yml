@@ -1,0 +1,78 @@
+name: HARMOHIT MIX — Windows VST3 x64
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-windows-vst3:
+    name: Build and test HARMOHIT MIX Windows x64 VST3
+    # Keep the same proven runner as VitaPlug Gainer80.
+    runs-on: windows-2022
+
+    steps:
+      - name: Check out VitaPlug HARMOHIT
+        uses: actions/checkout@v4
+
+      - name: Fetch pinned JUCE 9.0.3
+        shell: pwsh
+        run: |
+          $expected = 'be29c81492b6151c8ea8d14c840e1311963b3a83'
+          git clone --depth 1 --branch 9.0.3 https://github.com/juce-framework/JUCE.git external/JUCE
+          $actual = (git -C external/JUCE rev-parse HEAD).Trim()
+          if ($actual -ne $expected) {
+            throw "JUCE revision mismatch. Expected $expected, got $actual"
+          }
+
+      - name: Configure Release x64
+        shell: pwsh
+        run: >
+          cmake -S . -B build/windows-x64 -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_BUILD_TYPE=Release
+          -DJUCE_DIR="${{ github.workspace }}/external/JUCE"
+
+      - name: Build MIX VST3 and DSP tests
+        shell: pwsh
+        run: >
+          cmake --build build/windows-x64 --config Release
+          --target VitaPlugHarmoHitMix_VST3 VitaPlugHarmoHitDSPTests
+
+      - name: Run CTest
+        shell: pwsh
+        run: ctest --test-dir build/windows-x64 -C Release --output-on-failure
+
+      - name: Validate and package MIX VST3 bundle
+        shell: pwsh
+        run: |
+          $bundle = Get-ChildItem -Path build/windows-x64 -Directory -Filter 'VitaPlug HARMOHIT MIX.vst3' -Recurse |
+            Select-Object -First 1
+          if ($null -eq $bundle) {
+            throw 'No VitaPlug HARMOHIT MIX VST3 bundle was produced.'
+          }
+
+          $archDirectory = Join-Path $bundle.FullName 'Contents/x86_64-win'
+          if (-not (Test-Path -LiteralPath $archDirectory -PathType Container)) {
+            throw "Missing expected VST3 x64 directory: $archDirectory"
+          }
+          $pluginBinary = Get-ChildItem -Path $archDirectory -File -Filter '*.vst3' |
+            Select-Object -First 1
+          if ($null -eq $pluginBinary) {
+            throw 'No x64 VST3 binary was found inside the bundle.'
+          }
+
+          $stage = Join-Path $env:RUNNER_TEMP 'VitaPlug-HARMOHIT-MIX-v0.1.0-windows-x64'
+          $archive = Join-Path $env:RUNNER_TEMP 'VitaPlug-HARMOHIT-MIX-v0.1.0-windows-x64-vst3.zip'
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          Copy-Item -LiteralPath $bundle.FullName -Destination (Join-Path $stage $bundle.Name) -Recurse
+          Compress-Archive -Path (Join-Path $stage $bundle.Name) -DestinationPath $archive -Force
+          "VST3_ARCHIVE=$archive" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Upload Windows VST3 x64 ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: VitaPlug-HARMOHIT-MIX-v0.1.0-windows-x64-vst3
+          path: ${{ env.VST3_ARCHIVE }}
+          if-no-files-found: error
+          retention-days: 14
