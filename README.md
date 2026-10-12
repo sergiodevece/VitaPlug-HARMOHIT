@@ -1,46 +1,98 @@
-# VitaPlug HARMOHIT — Phase 1
+# VitaPlug HARMOHIT
 
-Two AU/VST3 effects share the header-only `HarmoCore` DSP engine: **VitaPlug
-HARMOHIT MIX** (`com.vitaplug.harmohit.mix`, `HhMx`) and **VitaPlug HARMOHIT
-MASTER** (`com.vitaplug.harmohit.master`, `HhMs`).  Their stable identifiers
-are deliberately distinct.
+**VitaPlug Creative Bundle · Vitalab**
+*vintage character / precise control*
+
+HARMOHIT is an in-progress C++/JUCE audio-effects project comprising two AU/VST3 processors that share a header-only DSP core:
+
+- **VitaPlug HARMOHIT MIX** — a broader, creative coloration variant.
+- **VitaPlug HARMOHIT MASTER** — a more restrained variant intended for smaller adjustments.
+
+The project explores spectral shaping, aural excitation and analog-inspired drive. It is published as a technical portfolio and learning record; see [Reuse and licensing](#reuse-and-licensing) before using any source or assets.
+
+## Current implementation
+
+The current source of truth is commit `34a1909` and the code in this repository.
+
+| Area | Implemented today |
+| --- | --- |
+| Plug-in formats | AU and VST3 on macOS; VST3 on Windows, as configured by CMake |
+| Audio layouts | Mono and stereo |
+| DSP | 4× oversampled shared core, 20 ms parameter smoothing, finite-sample containment and reported host latency |
+| Controls | HARMONICS, EXCITER, range (3 kHz / 8 kHz), PUSH ALL, DRIVE, Output Trim and Bypass |
+| State | APVTS parameter serialization, including migration from the earlier three-state EXCITER mode |
+| Metering | Input and post-Trim output VU taps with a 300 ms power integration |
+| Editor | A functional 520×300 engineering editor with direct parameter attachments |
+
+The vintage panel artwork under `Resources/HARMOHIT/` and the large visual-check images are design assets and visual explorations. They are **not** the current runtime editor drawn by `Source/PluginEditor.cpp`; the current compiled editor is the engineering interface described above. This distinction is intentional in the documentation so that the repository does not misrepresent a mockup as a shipped UI.
 
 ## Signal path
 
-`dry input -> [Harmonics residual | Exciter residual | Drive residual] in
-parallel -> sum with dry -> Output Trim`
+```text
+input → 4× oversampling → HARMONICS → EXCITER + DRIVE → Output Trim → downsampling
+```
 
-Each branch is a residual generator, so it cannot filter or delay the dry
-path. Harmonics combines even/odd terms and removes its DC component. Exciter
-uses independent 1.8–5.2 kHz and 5.5–14 kHz filter paths before generating
-nonlinear residuals; PUSH ALL averages their residuals to prevent unbounded
-level doubling. Drive uses a progressive tanh transfer and DC removal.
+`EXCITER` and `DRIVE` add nonlinear residuals to the current signal. `HARMONICS` is variant-specific: MASTER retains its earlier nonlinear residual algorithm, while MIX uses the spectral macro described below. There is no final limiter, mandatory normalization or automatic output compensation; Output Trim remains manual. The oversampling route is retained during bypass so host latency alignment is preserved.
 
-MIX and MASTER share algorithms but differ in the control law and maxima:
-MASTER uses a lower, progressive curve for precise small adjustments; MIX
-retains a broader high-end creative range. The curves are monotonic and reserve
-the strongest colour for the final control travel. All continuous controls ramp
-over 20 ms. There is deliberately no post-DSP limiter, mandatory output
-normalisation or clipping: samples above 0 dBFS remain valid floating-point
-output. The only bounded transfers are the explicit artistic saturators in the
-Harmonics, Exciter and Drive branches; Output Trim remains entirely manual.
+## HARMONICS in HARMOHIT MIX
 
-`HarmoCore` has fixed two-channel state and no allocation in `process`.
-NaN/Inf input samples are made safe before they reach the resampling filters.
-All three nonlinear branches run after two JUCE polyphase-IIR 2× stages (4×
-effective). The complete dry-plus-residual sum is downsampled together, so
-there is no separate dry/wet path to misalign. JUCE is configured for integer
-latency and that exact latency is reported to the host at prepare time; bypass
-continues through the same resampling route. The stage-count architecture is
-ready for a future prepared third stage (8×), but exposes no runtime mode yet.
+The parameter name **HARMONICS** has been retained for continuity, but it must not be described as a nonlinear harmonic generator in the current MIX implementation.
 
-## Build and test
+Early development used nonlinear harmonic generation. Listening and smoke tests showed that its predominant result was distortion that was not useful for this product, so the MIX macro was rebuilt as three linear shelving stages:
+
+| Stage | Nominal transition | Maximum at macro = 100% |
+| --- | ---: | ---: |
+| Body low shelf | 300 Hz | +6 dB |
+| Presence high shelf | 1.8 kHz | +7 dB |
+| Air high shelf | 12 kHz | +9 dB |
+
+These R5 maxima are present in `calibrateMixHarmonics()` in `Source/DSP/HarmoCore.h`. The macro uses independent concave gain laws, so the intermediate position is deliberately not a simple linear fraction of each maximum.
+
+The shelves are cascaded. At a frequency where both high shelves contribute, their gains multiply in linear gain (and therefore add in dB); the +7 dB and +9 dB figures are individual stage maxima, not a single capped “treble” boost. The response also contains the low shelf, so the final frequency response is the product of all applicable stages. No saturation, DC blocking, dry/wet cancellation or output normalization is added by the MIX HARMONICS macro itself.
+
+## Build
+
+Requirements:
+
+- CMake 3.22 or later
+- A C++20 compiler
+- A local **JUCE 9.0.3** source checkout
+
+JUCE is deliberately not vendored. Point CMake at it with `JUCE_DIR`; the default is a developer-local sibling path and will not normally exist after a fresh clone.
 
 ```sh
-cmake -S . -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target VitaPlugHarmoHitMix_AU VitaPlugHarmoHitMix_VST3 VitaPlugHarmoHitMaster_AU VitaPlugHarmoHitMaster_VST3 VitaPlugHarmoHitDSPTests
+cmake -S . -B build -G "Unix Makefiles" \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DJUCE_DIR=/absolute/path/to/JUCE
+cmake --build build --target VitaPlugHarmoHitDSPTests
 ctest --test-dir build --output-on-failure
 ```
 
-The processor intentionally reports no editor in Phase 1. Parameters are
-automatable and serialised through `AudioProcessorValueTreeState`.
+Build plug-in targets when the platform toolchain and JUCE configuration are available:
+
+```sh
+cmake --build build --target \
+  VitaPlugHarmoHitMix_AU VitaPlugHarmoHitMix_VST3 \
+  VitaPlugHarmoHitMaster_AU VitaPlugHarmoHitMaster_VST3
+```
+
+On Windows, CMake configures VST3 only. The `VitaPlugHarmoHitMixEditorPreview` target is a development-only JUCE application for inspecting the real MIX editor; it is not an installer or plug-in format.
+
+## Verification
+
+`VitaPlugHarmoHitDSPTests` covers, among other things:
+
+- 4× oversampling and latency coherence;
+- neutral and bypass alignment;
+- R5 HARMONICS response, monotonic progression, linearity and sample-rate checks;
+- mono/stereo, block-size and finite-value safety;
+- automation, parameter serialization and legacy-state migration;
+- EXCITER range/PUSH ALL routing and VU tap placement.
+
+The detailed engineering record, including known limits and the development decisions behind the current DSP, is in [Documentation/DEVELOPMENT_NOTES.md](Documentation/DEVELOPMENT_NOTES.md). Third-party and repository-publication notes are in [Documentation/THIRD_PARTY_AND_PUBLICATION.md](Documentation/THIRD_PARTY_AND_PUBLICATION.md).
+
+## Reuse and licensing
+
+No license for reuse of VitaPlug HARMOHIT source code or artwork is currently offered. This public repository does not grant general permission to reuse, modify or redistribute the project’s own code or assets.
+
+JUCE and any other third-party material remain subject to their own licenses. A person building, distributing or otherwise using a derivative must independently ensure that their JUCE licensing and all other obligations are satisfied; see [Documentation/THIRD_PARTY_AND_PUBLICATION.md](Documentation/THIRD_PARTY_AND_PUBLICATION.md).

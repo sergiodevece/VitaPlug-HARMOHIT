@@ -20,6 +20,15 @@ compile_commands.json
 .vscode/
 .idea/
 
+# Entorno local y credenciales (nunca publicar valores reales)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
 # Artefactos compilados
 *.component/
 *.vst3/
