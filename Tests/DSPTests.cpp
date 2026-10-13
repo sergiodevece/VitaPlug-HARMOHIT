@@ -351,7 +351,7 @@ int main()
     juce::ScopedJuceInitialiser_GUI gui;
     HarmoHitAudioProcessor controlProcessor;
     controlProcessor.parameters.getParameter("harmonics")->setValueNotifyingHost(0.25f);
-    HarmoHitAudioProcessorEditor controlEditor(controlProcessor);
+    HarmoHitAudioProcessorEditor controlEditor(controlProcessor, false);
     auto* harmonicControl = dynamic_cast<juce::Slider*>(controlEditor.findChildWithID("harmonics"));
     auto* exciterControl = dynamic_cast<juce::Slider*>(controlEditor.findChildWithID("exciter"));
     auto* driveControl = dynamic_cast<juce::Slider*>(controlEditor.findChildWithID("drive"));

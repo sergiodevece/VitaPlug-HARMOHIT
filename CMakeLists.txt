@@ -46,6 +46,7 @@ function(add_harmohit_plugin target product_name bundle_id plugin_code flavour_d
     target_sources(${target} PRIVATE
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp)
+    target_sources(${target} PRIVATE Source/UI/HarmoHitSkin.cpp)
     target_include_directories(${target} PRIVATE Source)
     target_compile_definitions(${target} PRIVATE ${flavour_define}
         JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0 JUCE_VST3_CAN_REPLACE_VST2=0)
@@ -68,6 +69,7 @@ add_executable(VitaPlugHarmoHitDSPTests
     Tests/DSPTests.cpp
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp)
+target_sources(VitaPlugHarmoHitDSPTests PRIVATE Source/UI/HarmoHitSkin.cpp)
 target_include_directories(VitaPlugHarmoHitDSPTests PRIVATE Source)
 target_compile_definitions(VitaPlugHarmoHitDSPTests PRIVATE VITAPLUG_HARMOHIT_MIX=1
     JUCE_WEB_BROWSER=0 JUCE_USE_CURL=0)
@@ -88,6 +90,7 @@ target_sources(VitaPlugHarmoHitMixEditorPreview PRIVATE
     Tests/EditorPreview.cpp
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp)
+target_sources(VitaPlugHarmoHitMixEditorPreview PRIVATE Source/UI/HarmoHitSkin.cpp)
 target_include_directories(VitaPlugHarmoHitMixEditorPreview PRIVATE Source)
 target_compile_definitions(VitaPlugHarmoHitMixEditorPreview PRIVATE
     VITAPLUG_HARMOHIT_MIX=1

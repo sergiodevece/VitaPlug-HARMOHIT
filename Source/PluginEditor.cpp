@@ -41,9 +41,23 @@ void HarmoEngineeringMeter::paint(juce::Graphics& g)
     g.drawRoundedRectangle(bar, 3.0f, 1.0f);
 }
 
-HarmoHitAudioProcessorEditor::HarmoHitAudioProcessorEditor(HarmoHitAudioProcessor& p)
+HarmoHitAudioProcessorEditor::HarmoHitAudioProcessorEditor(HarmoHitAudioProcessor& p, bool useVintage)
     : AudioProcessorEditor(&p), audioProcessor(p)
 {
+#if defined(VITAPLUG_HARMOHIT_MIX)
+    if (useVintage)
+    {
+        vintageSkin = std::make_unique<harmohit::ui::HarmoHitSkin>(p.parameters,
+            harmohit::ui::ParameterIds{}, [&p] { return p.getInputVuDbfs() + 18.0f; },
+            [&p] { return p.getOutputVuDbfs() + 18.0f; });
+        addAndMakeVisible(*vintageSkin);
+        setSize(760, 380);
+        setResizable(false, false);
+        return;
+    }
+#else
+    juce::ignoreUnused(useVintage);
+#endif
     setSize(520, 300);
     setResizable(false, false);
     for (auto* label : { &harmonicsLabel, &exciterLabel, &driveLabel, &trimLabel, &rangeLabel })
@@ -77,6 +91,7 @@ HarmoHitAudioProcessorEditor::HarmoHitAudioProcessorEditor(HarmoHitAudioProcesso
 
 void HarmoHitAudioProcessorEditor::resized()
 {
+    if (vintageSkin) { vintageSkin->setBounds(getLocalBounds()); return; }
     auto area = getLocalBounds().reduced(16);
     auto controls = area.removeFromTop(148);
     const auto placeSlider = [&controls] (juce::Label& label, juce::Slider& slider)
@@ -102,6 +117,7 @@ void HarmoHitAudioProcessorEditor::resized()
 
 void HarmoHitAudioProcessorEditor::paint(juce::Graphics& g)
 {
+    if (vintageSkin) return;
     g.fillAll(juce::Colour(0xff20242a));
     g.setColour(juce::Colours::white.withAlpha(0.16f));
     g.drawRect(getLocalBounds(), 1);

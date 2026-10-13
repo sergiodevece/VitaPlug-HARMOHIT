@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PluginProcessor.h"
+#include "UI/HarmoHitSkin.h"
 
 class HarmoEngineeringMeter final : public juce::Component, private juce::Timer
 {
@@ -18,7 +19,7 @@ private:
 class HarmoHitAudioProcessorEditor final : public juce::AudioProcessorEditor
 {
 public:
-    explicit HarmoHitAudioProcessorEditor(HarmoHitAudioProcessor&);
+    explicit HarmoHitAudioProcessorEditor(HarmoHitAudioProcessor&, bool useVintage = true);
     void paint(juce::Graphics&) override;
     void resized() override;
 
@@ -45,5 +46,6 @@ private:
     ComboBoxAttachment rangeAttachment { audioProcessor.parameters, "exciterRange", range };
     ButtonAttachment pushAllAttachment { audioProcessor.parameters, "pushAll", pushAll };
     ButtonAttachment bypassAttachment { audioProcessor.parameters, "bypass", bypass };
+    std::unique_ptr<harmohit::ui::HarmoHitSkin> vintageSkin;
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(HarmoHitAudioProcessorEditor)
 };
