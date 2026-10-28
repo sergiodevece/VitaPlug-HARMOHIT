@@ -110,3 +110,7 @@ The detailed engineering record, including known limits and the development deci
 No license for reuse of VitaPlug HARMOHIT source code or artwork is currently offered. This public repository does not grant general permission to reuse, modify or redistribute the project’s own code or assets.
 
 JUCE and any other third-party material remain subject to their own licenses. A person building, distributing or otherwise using a derivative must independently ensure that their JUCE licensing and all other obligations are satisfied; see [Documentation/THIRD_PARTY_AND_PUBLICATION.md](Documentation/THIRD_PARTY_AND_PUBLICATION.md).
+
+---
+
+**Author:** Sergio Devece · SerxDev — [Portfolio](https://serxdev.org)
