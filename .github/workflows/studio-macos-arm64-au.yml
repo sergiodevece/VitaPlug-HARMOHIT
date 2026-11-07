@@ -1,0 +1,54 @@
+name: Studio macOS ARM64 AU - HARMOHIT-MIX
+on:
+  push:
+    branches:
+      - studio-macos-au-arm64-20261107
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-au:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Fetch pinned JUCE 9.0.3
+        shell: bash
+        run: |
+          git clone --depth 1 --branch 9.0.3 https://github.com/juce-framework/JUCE.git external/JUCE
+          test "$(git -C external/JUCE rev-parse HEAD)" = "be29c81492b6151c8ea8d14c840e1311963b3a83"
+      - name: Configure arm64 AU
+        shell: bash
+        run: |
+          cmake -S . -B build/studio-arm64 -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -DJUCE_DIR=$GITHUB_WORKSPACE/external/JUCE
+      - name: Build Audio Unit and tests
+        shell: bash
+        run: |
+          cmake --build build/studio-arm64 --parallel 3 --target VitaPlugHarmoHitMix_AU VitaPlugHarmoHitDSPTests
+          ctest --test-dir build/studio-arm64 --output-on-failure
+      - name: Verify and package AU
+        shell: bash
+        run: |
+          set -euo pipefail
+          component="$(find build/studio-arm64 -type d -name '*.component' -print -quit)"
+          test -n "$component"
+          test -f "$component/Contents/Info.plist"
+          binary_name="$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$component/Contents/Info.plist")"
+          binary="$component/Contents/MacOS/$binary_name"
+          test -f "$binary"
+          xcrun lipo -archs "$binary" | grep -qw arm64
+          codesign --force --deep --sign - "$component"
+          codesign --verify --deep --strict "$component"
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent "$component" "dist/HARMOHIT-MIX-macOS-arm64-AU.zip"
+          shasum -a 256 dist/*.zip > dist/SHA256SUMS.txt
+          printf 'HARMOHIT-MIX AU arm64\nSource commit: %s\nJUCE: 9.0.3 be29c81492b6151c8ea8d14c840e1311963b3a83\n' "$GITHUB_SHA" > dist/BUILDINFO.txt
+      - name: Upload compiled AU ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: HARMOHIT-MIX-macOS-arm64-AU
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
